@@ -316,7 +316,7 @@ fun AnimatedSubscribeButton(
 }
 
 /** Fracción del ancho de la fila que hay que recorrer (y soltar) para ejecutar una acción de deslizar. */
-private const val SWIPE_ACTION_THRESHOLD = 0.6f
+private const val SWIPE_ACTION_THRESHOLD = 0.4f
 
 /**
  * Contenedor de deslizar con «resorte»: la acción solo se ejecuta si el dedo se suelta tras
