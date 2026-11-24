@@ -64,6 +64,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.withContext
 
 /**
@@ -100,6 +101,12 @@ class PodcastPlaybackService : MediaLibraryService() {
     private val serviceScope = CoroutineScope(Dispatchers.Main.immediate + SupervisorJob())
 
     private var currentPlayingEpisodeId: String? = null
+        set(value) {
+            field = value
+            activeEpisodeIdFlow.value = value
+        }
+    /** Episodio en curso como flujo, para seguir su estado de favorito en la base de datos. */
+    private val activeEpisodeIdFlow = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
     private var currentPodcastId: String? = null
     private var currentPodcastTitle: String? = null
     private var appliedDefaultSpeed: Float? = null
@@ -117,6 +124,7 @@ class PodcastPlaybackService : MediaLibraryService() {
         val COMMAND_CYCLE_SPEED = PlaybackController.COMMAND_CYCLE_SPEED
         val COMMAND_NEXT_CHAPTER = PlaybackController.COMMAND_NEXT_CHAPTER
         val COMMAND_PREV_CHAPTER = PlaybackController.COMMAND_PREV_CHAPTER
+        val COMMAND_TOGGLE_FAVORITE = PlaybackController.COMMAND_TOGGLE_FAVORITE
 
         const val ACTION_PLAY_PAUSE = "com.ferlagod.mispodcast.action.PLAY_PAUSE"
         const val ACTION_SKIP_FORWARD = "com.ferlagod.mispodcast.action.SKIP_FORWARD"
@@ -501,7 +509,23 @@ class PodcastPlaybackService : MediaLibraryService() {
         )
     }
 
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     private fun observeDatabaseChangesForAuto() {
+        // Botón de favorito: refleja el estado del episodio en curso aunque se cambie desde la app
+        serviceScope.launch {
+            activeEpisodeIdFlow
+                .flatMapLatest { id ->
+                    if (id.isNullOrBlank()) kotlinx.coroutines.flow.flowOf(null)
+                    else database.podcastDao().getEpisodeFlow(id).map { it?.isFavorite }
+                }
+                .distinctUntilChanged()
+                .collect { isFavorite ->
+                    playbackController.currentEpisodeFavorite = isFavorite
+                    applyCustomLayout(
+                        playbackController.buildCustomCommandButtons(currentSpeed = player.playbackParameters.speed)
+                    )
+                }
+        }
         serviceScope.launch {
             database.podcastDao().getQueueFlow()
                 .distinctUntilChanged()
@@ -572,6 +596,7 @@ class PodcastPlaybackService : MediaLibraryService() {
                 .add(COMMAND_CYCLE_SPEED)
                 .add(COMMAND_NEXT_CHAPTER)
                 .add(COMMAND_PREV_CHAPTER)
+                .add(COMMAND_TOGGLE_FAVORITE)
                 .build()
 
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
@@ -783,6 +808,19 @@ class PodcastPlaybackService : MediaLibraryService() {
                         podcastId = currentPodcastId,
                         podcastTitle = currentPodcastTitle ?: "Podcast"
                     )
+                    return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+                }
+                PlaybackController.ACTION_CUSTOM_TOGGLE_FAVORITE -> {
+                    val episodeId = currentPlayingEpisodeId
+                        ?: return Futures.immediateFuture(SessionResult(SessionResult.RESULT_ERROR_BAD_VALUE))
+                    serviceScope.launch {
+                        withContext(Dispatchers.IO) {
+                            val ep = database.podcastDao().getEpisodeById(episodeId) ?: return@withContext
+                            database.podcastDao().updateFavoriteStatus(episodeId, !ep.isFavorite)
+                        }
+                        // El botón se actualiza solo al observar el cambio en la base de datos
+                        syncManager.triggerSyncIfConfigured(1500L)
+                    }
                     return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
                 }
                 PlaybackController.ACTION_CUSTOM_CYCLE_SPEED -> {

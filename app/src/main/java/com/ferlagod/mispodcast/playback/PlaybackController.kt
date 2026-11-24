@@ -60,6 +60,8 @@ class PlaybackController(
     @Volatile var skipBackMs: Long = 10_000L
     @Volatile var skipForwardMs: Long = 30_000L
     @Volatile var currentChapters: List<com.ferlagod.mispodcast.data.model.Chapter> = emptyList()
+    /** Si el episodio en curso es favorito (null mientras no se sabe: no se muestra el botón). */
+    @Volatile var currentEpisodeFavorite: Boolean? = null
 
     private var playbackSpeedIndex = 0
     val availableSpeeds = PLAYBACK_SPEEDS
@@ -76,6 +78,7 @@ class PlaybackController(
         const val ACTION_CUSTOM_CYCLE_SPEED = "com.ferlagod.mispodcast.CYCLE_SPEED"
         const val ACTION_CUSTOM_NEXT_CHAPTER = "com.ferlagod.mispodcast.NEXT_CHAPTER"
         const val ACTION_CUSTOM_PREV_CHAPTER = "com.ferlagod.mispodcast.PREV_CHAPTER"
+        const val ACTION_CUSTOM_TOGGLE_FAVORITE = "com.ferlagod.mispodcast.TOGGLE_FAVORITE"
 
         private fun createCommand(action: String): SessionCommand {
             return try {
@@ -98,6 +101,7 @@ class PlaybackController(
         }
 
         val COMMAND_REPLAY_10 by lazy { createCommand(ACTION_CUSTOM_REPLAY_10) }
+        val COMMAND_TOGGLE_FAVORITE by lazy { createCommand(ACTION_CUSTOM_TOGGLE_FAVORITE) }
         val COMMAND_FORWARD_30 by lazy { createCommand(ACTION_CUSTOM_FORWARD_30) }
         val COMMAND_CYCLE_SPEED by lazy { createCommand(ACTION_CUSTOM_CYCLE_SPEED) }
         val COMMAND_NEXT_CHAPTER by lazy { createCommand(ACTION_CUSTOM_NEXT_CHAPTER) }
@@ -247,7 +251,8 @@ class PlaybackController(
         skipBackSeconds: Int = (skipBackMs / 1000).toInt(),
         skipForwardSeconds: Int = (skipForwardMs / 1000).toInt(),
         currentSpeed: Float = availableSpeeds.getOrElse(playbackSpeedIndex) { 1.0f },
-        hasChapters: Boolean = currentChapters.isNotEmpty()
+        hasChapters: Boolean = currentChapters.isNotEmpty(),
+        isFavorite: Boolean? = currentEpisodeFavorite
     ): List<CommandButton> {
         val buttons = mutableListOf<CommandButton>()
 
@@ -262,6 +267,20 @@ class PlaybackController(
             .setDisplayName(label(R.string.player_skip_forward_format, "Avanzar $skipForwardSeconds s", skipForwardSeconds))
             .build()
         buttons.add(forwardButton)
+
+        // Favorito: corazón relleno/vacío según el estado del episodio en curso (Android Auto y notificación)
+        if (isFavorite != null) {
+            val favoriteButton = CommandButton.Builder(
+                if (isFavorite) CommandButton.ICON_HEART_FILLED else CommandButton.ICON_HEART_UNFILLED
+            )
+                .setSessionCommand(COMMAND_TOGGLE_FAVORITE)
+                .setDisplayName(
+                    if (isFavorite) label(R.string.action_remove_favorite, "Quitar de favoritos")
+                    else label(R.string.action_add_favorite, "Añadir a favoritos")
+                )
+                .build()
+            buttons.add(favoriteButton)
+        }
 
         if (hasChapters) {
             val nextChapterButton = CommandButton.Builder(CommandButton.ICON_NEXT)
