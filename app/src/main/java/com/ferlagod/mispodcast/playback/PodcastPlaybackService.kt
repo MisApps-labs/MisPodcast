@@ -113,12 +113,15 @@ class PodcastPlaybackService : MediaLibraryService() {
     private var currentPodcastHasCustomSpeed = false
     /** Episodio terminado al saltar más allá de su final: cuenta como completado al cambiar. */
     private var skippedPastEndEpisodeId: String? = null
+    private lateinit var streamPreloader: StreamPreloader
 
     companion object {
         private const val TAG = "PodcastPlaybackService"
 
         const val CHANNEL_ID = "mis_podcast_playback_channel"
         const val NOTIFICATION_ID = 1001
+        /** Episodios siguientes de la cola cuyo comienzo se precarga en la caché. */
+        private const val PRELOAD_UPCOMING_COUNT = 2
 
         val PLAYBACK_SPEEDS = PlaybackController.PLAYBACK_SPEEDS
         val COMMAND_REPLAY_10 = PlaybackController.COMMAND_REPLAY_10
@@ -280,7 +283,10 @@ class PodcastPlaybackService : MediaLibraryService() {
             .setAllowCrossProtocolRedirects(true)
             .setConnectTimeoutMs(15_000)
             .setReadTimeoutMs(20_000)
-        val dataSourceFactory = DefaultDataSource.Factory(this, httpDataSourceFactory)
+        // El streaming pasa por la caché en disco; los ficheros locales los sigue leyendo DefaultDataSource
+        val cacheDataSourceFactory = StreamCache.cacheDataSourceFactory(this, httpDataSourceFactory)
+        streamPreloader = StreamPreloader(cacheDataSourceFactory, serviceScope)
+        val dataSourceFactory = DefaultDataSource.Factory(this, cacheDataSourceFactory)
 
         // Búfer pensado para podcasts en streaming: guarda hasta 3 min por delante (y el principio
         // del siguiente episodio), arranca con 1,5 s de audio y se recupera antes tras un corte.
@@ -574,6 +580,11 @@ class PodcastPlaybackService : MediaLibraryService() {
         val currentId = player.currentMediaItem?.mediaId ?: return
         // Mismo orden que muestra la pantalla de cola: el resto de la cola, sin el episodio activo
         val desired = queue.filter { it.episode.id != currentId }
+
+        // Dejar en caché el arranque de los dos siguientes, por si al llegar a ellos no hay cobertura
+        streamPreloader.preload(
+            desired.take(PRELOAD_UPCOMING_COUNT).map { it.episode to autoBrowseTree.resolvePlaybackUri(it.episode) }
+        )
 
         val currentIndex = player.currentMediaItemIndex
         val upcomingIds = (currentIndex + 1 until player.mediaItemCount).map { player.getMediaItemAt(it).mediaId }
@@ -1090,6 +1101,7 @@ class PodcastPlaybackService : MediaLibraryService() {
             podcastTitle = currentPodcastTitle ?: "Podcast"
         )
         progressTracker.stop()
+        streamPreloader.cancel()
         serviceScope.cancel()
         audioEffectsManager.release()
         player.release()
