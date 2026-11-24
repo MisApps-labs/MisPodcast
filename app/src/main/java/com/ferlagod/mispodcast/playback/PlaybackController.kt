@@ -62,6 +62,12 @@ class PlaybackController(
     @Volatile var currentChapters: List<com.ferlagod.mispodcast.data.model.Chapter> = emptyList()
     /** Si el episodio en curso es favorito (null mientras no se sabe: no se muestra el botón). */
     @Volatile var currentEpisodeFavorite: Boolean? = null
+    /**
+     * Si un salto hacia delante llega al final del episodio, el servicio puede pasar directamente
+     * al siguiente (devuelve true). Así no se busca al final exacto del fichero, que obliga a
+     * descartar el búfer y retrasa el arranque del siguiente episodio.
+     */
+    @Volatile var forwardPastEndHandler: ((targetMs: Long) -> Boolean)? = null
 
     private var playbackSpeedIndex = 0
     val availableSpeeds = PLAYBACK_SPEEDS
@@ -125,9 +131,10 @@ class PlaybackController(
         }
 
         override fun seekForward() {
+            val rawTarget = currentPosition + skipForwardMs
+            if (forwardPastEndHandler?.invoke(rawTarget) == true) return
             val maxDur = if (duration > 0) duration else Long.MAX_VALUE
-            val target = min(maxDur, currentPosition + skipForwardMs)
-            seekTo(target)
+            seekTo(min(maxDur, rawTarget))
         }
 
         // Los botones "siguiente/anterior" de auriculares, mandos Bluetooth y Android Auto

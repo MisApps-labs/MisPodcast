@@ -111,6 +111,8 @@ class PodcastPlaybackService : MediaLibraryService() {
     private var currentPodcastTitle: String? = null
     private var appliedDefaultSpeed: Float? = null
     private var currentPodcastHasCustomSpeed = false
+    /** Episodio terminado al saltar más allá de su final: cuenta como completado al cambiar. */
+    private var skippedPastEndEpisodeId: String? = null
 
     companion object {
         private const val TAG = "PodcastPlaybackService"
@@ -272,19 +274,44 @@ class PodcastPlaybackService : MediaLibraryService() {
             }
         }
 
+        // Tiempos de espera más generosos para cobertura mala (por defecto 8 s), p. ej. en el coche
         val httpDataSourceFactory = DefaultHttpDataSource.Factory()
             .setUserAgent(com.ferlagod.mispodcast.util.AudioTrackingSanitizer.GENERIC_PRIVACY_USER_AGENT)
             .setAllowCrossProtocolRedirects(true)
+            .setConnectTimeoutMs(15_000)
+            .setReadTimeoutMs(20_000)
         val dataSourceFactory = DefaultDataSource.Factory(this, httpDataSourceFactory)
 
+        // Búfer pensado para podcasts en streaming: guarda hasta 3 min por delante (y el principio
+        // del siguiente episodio), arranca con 1,5 s de audio y se recupera antes tras un corte.
+        // Conserva 1 min por detrás para que «retroceder» no tenga que volver a descargar.
+        val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
+            .setBufferDurationsMs(
+                /* minBufferMs = */ 60_000,
+                /* maxBufferMs = */ 180_000,
+                /* bufferForPlaybackMs = */ 1_500,
+                /* bufferForPlaybackAfterRebufferMs = */ 3_000
+            )
+            .setBackBuffer(60_000, true)
+            .setPrioritizeTimeOverSizeThresholds(true)
+            .build()
+
+        // Más reintentos ante cortes de red antes de dar el error por definitivo (por defecto 3)
+        val mediaSourceFactory = DefaultMediaSourceFactory(dataSourceFactory)
+            .setLoadErrorHandlingPolicy(
+                androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy(/* minimumLoadableRetryCount = */ 6)
+            )
+
         player = ExoPlayer.Builder(this, renderersFactory)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
+            .setMediaSourceFactory(mediaSourceFactory)
+            .setLoadControl(loadControl)
             .setAudioAttributes(audioAttributes, true)
             .setHandleAudioBecomingNoisy(true)
             .setWakeMode(C.WAKE_MODE_NETWORK)
             .build()
 
         audioEffectsManager.attachAudioSession(player.audioSessionId)
+        playbackController.forwardPastEndHandler = { target -> advanceIfSkipReachesEnd(target) }
 
         player.addListener(object : Player.Listener {
             override fun onAudioSessionIdChanged(audioSessionId: Int) {
@@ -339,7 +366,9 @@ class PodcastPlaybackService : MediaLibraryService() {
                     val newPodcastTitle = mediaItem.mediaMetadata.artist?.toString()
                         ?: mediaItem.mediaMetadata.albumTitle?.toString()
 
-                    val finishedNaturally = reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO &&
+                    val skippedPastEnd = !previousEpisodeId.isNullOrBlank() && previousEpisodeId == skippedPastEndEpisodeId
+                    skippedPastEndEpisodeId = null
+                    val finishedNaturally = (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO || skippedPastEnd) &&
                         !previousEpisodeId.isNullOrBlank() && previousEpisodeId != newEpisodeId
                     if (!previousEpisodeId.isNullOrBlank() && previousEpisodeId != newEpisodeId) {
                         progressTracker.flushPendingListenedTime(
@@ -799,8 +828,12 @@ class PodcastPlaybackService : MediaLibraryService() {
                     return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
                 }
                 PlaybackController.ACTION_CUSTOM_FORWARD_30 -> {
+                    val rawTarget = player.currentPosition + playbackController.skipForwardMs
+                    if (advanceIfSkipReachesEnd(rawTarget)) {
+                        return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+                    }
                     val maxDur = if (player.duration > 0) player.duration else Long.MAX_VALUE
-                    val target = kotlin.math.min(maxDur, player.currentPosition + playbackController.skipForwardMs)
+                    val target = kotlin.math.min(maxDur, rawTarget)
                     player.seekTo(target)
                     progressTracker.saveCurrentPlaybackPosition(
                         player = player,
@@ -851,6 +884,38 @@ class PodcastPlaybackService : MediaLibraryService() {
             }
             return super.onCustomCommand(session, controller, customCommand, args)
         }
+    }
+
+    /**
+     * Si el salto hacia delante llega al final del episodio y hay otro a continuación, pasa
+     * directamente a él en su posición guardada, con una sola búsqueda. Antes se buscaba al final
+     * exacto del fichero: ExoPlayer descartaba el búfer, detectaba el final y luego volvía a buscar
+     * la posición reanudada, lo que con mala cobertura tardaba en arrancar.
+     */
+    private fun advanceIfSkipReachesEnd(targetMs: Long): Boolean {
+        val duration = player.duration
+        if (duration == C.TIME_UNSET || duration <= 0L || targetMs < duration - 500L) return false
+        if (!player.hasNextMediaItem()) return false
+        val finishedMediaId = player.currentMediaItem?.mediaId ?: return false
+        val nextIndex = player.nextMediaItemIndex
+        val nextMediaId = player.getMediaItemAt(nextIndex).mediaId
+        skippedPastEndEpisodeId = currentPlayingEpisodeId
+
+        serviceScope.launch {
+            val next = withContext(Dispatchers.IO) { database.podcastDao().getEpisodeById(nextMediaId) }
+            // Pudo terminar solo (o cambiar de episodio) mientras se consultaba la base de datos
+            if (player.currentMediaItem?.mediaId != finishedMediaId) return@launch
+            if (nextIndex >= player.mediaItemCount || player.getMediaItemAt(nextIndex).mediaId != nextMediaId) {
+                skippedPastEndEpisodeId = null
+                player.seekTo(duration)
+                return@launch
+            }
+            val resumeMs = next?.let { ep ->
+                if (ep.currentPositionMs > 0L && (ep.duration <= 0L || ep.currentPositionMs < ep.duration - 5000L)) ep.currentPositionMs else 0L
+            } ?: 0L
+            player.seekTo(nextIndex, resumeMs)
+        }
+        return true
     }
 
     /** Episodios para los que ya se reintentó con la URL original (un solo intento por episodio). */
@@ -957,9 +1022,11 @@ class PodcastPlaybackService : MediaLibraryService() {
                     syncWidgetState()
                 }
                 ACTION_SKIP_FORWARD -> {
-                    val maxDur = if (player.duration > 0) player.duration else Long.MAX_VALUE
-                    val target = kotlin.math.min(maxDur, player.currentPosition + playbackController.skipForwardMs)
-                    player.seekTo(target)
+                    val rawTarget = player.currentPosition + playbackController.skipForwardMs
+                    if (!advanceIfSkipReachesEnd(rawTarget)) {
+                        val maxDur = if (player.duration > 0) player.duration else Long.MAX_VALUE
+                        player.seekTo(kotlin.math.min(maxDur, rawTarget))
+                    }
                     syncWidgetState()
                 }
                 ACTION_SKIP_BACKWARD -> {
