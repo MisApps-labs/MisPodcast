@@ -22,6 +22,7 @@ import android.os.Build
 import android.text.Html
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -34,6 +35,9 @@ import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.ui.input.pointer.pointerInput
 import kotlin.math.abs
+import kotlinx.coroutines.launch
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlin.math.sign
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -162,68 +166,88 @@ fun MiniPlayer(
         val artwork = episode.imageUrl.ifBlank { podcastArtworkUrl }
         val dominantArtworkColor = rememberArtworkDominantColor(artworkUrl = artwork.ifBlank { null })
 
-        // Gestos con resorte: solo actúan al soltar tras recorrer suficiente distancia
+        // Gestos con resorte: solo actúan al soltar tras recorrer suficiente distancia.
+        // La tarjeta sigue al dedo 1:1 hasta el umbral y opone resistencia a partir de ahí;
+        // al soltar vuelve a su sitio con un resorte (antes el resorte actuaba también durante
+        // el arrastre y la tarjeta iba por detrás del dedo).
         val density = LocalDensity.current
-        val maxSwipePx = with(density) { 120.dp.toPx() }
         val skipThresholdPx = with(density) { 96.dp.toPx() }
+        val maxSwipePx = with(density) { 140.dp.toPx() }
         val expandThresholdPx = with(density) { 56.dp.toPx() }
-        var offsetX by remember { mutableFloatStateOf(0f) }
+        val maxLiftPx = with(density) { 20.dp.toPx() }
+        val gestureScope = rememberCoroutineScope()
+        val offsetXAnim = remember { Animatable(0f) }
+        val offsetYAnim = remember { Animatable(0f) }
+        var rawX by remember { mutableFloatStateOf(0f) }
         var dragY by remember { mutableFloatStateOf(0f) }
-        val animatedOffsetX by animateFloatAsState(
-            targetValue = offsetX,
-            animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
-            label = "mini_player_swipe_x"
-        )
+
+        fun rubberBand(raw: Float): Float {
+            val magnitude = abs(raw)
+            if (magnitude <= skipThresholdPx) return raw
+            val extra = ((magnitude - skipThresholdPx) * 0.35f).coerceAtMost(maxSwipePx - skipThresholdPx)
+            return (skipThresholdPx + extra) * sign(raw)
+        }
+
+        fun settle() {
+            rawX = 0f
+            dragY = 0f
+            gestureScope.launch { offsetXAnim.animateTo(0f, spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMediumLow)) }
+            gestureScope.launch { offsetYAnim.animateTo(0f, spring(stiffness = Spring.StiffnessMediumLow)) }
+        }
 
         Card(
             modifier = modifier
                 .fillMaxWidth()
                 .padding(horizontal = 14.dp, vertical = 6.dp)
-                .offset { IntOffset(animatedOffsetX.roundToInt(), 0) }
+                .offset { IntOffset(offsetXAnim.value.roundToInt(), offsetYAnim.value.roundToInt()) }
                 .testTag("mini_player")
                 .pointerInput(Unit) {
                     detectDragGestures(
                         onDragStart = {
-                            offsetX = 0f
+                            // Si aún volvía a su sitio, se retoma desde donde está (sin saltos)
+                            rawX = offsetXAnim.value
                             dragY = 0f
                         },
                         onDrag = { change, dragAmount ->
                             change.consume()
-                            val wasArmed = abs(offsetX) >= skipThresholdPx || -dragY >= expandThresholdPx
+                            val wasArmed = abs(rawX) >= skipThresholdPx || -dragY >= expandThresholdPx
                             dragY += dragAmount.y
-                            // Deslizar horizontal con amortiguación (resistencia creciente hacia el tope)
-                            if (-dragY < expandThresholdPx || abs(offsetX) > abs(dragY)) {
-                                offsetX = (offsetX + dragAmount.x * 0.6f).coerceIn(-maxSwipePx, maxSwipePx)
+                            // Deslizar horizontal salvo que el gesto sea claramente hacia arriba
+                            if (-dragY < expandThresholdPx || abs(rawX) > abs(dragY)) {
+                                rawX += dragAmount.x
                             }
-                            val isArmed = abs(offsetX) >= skipThresholdPx || -dragY >= expandThresholdPx
+                            val isArmed = abs(rawX) >= skipThresholdPx || -dragY >= expandThresholdPx
                             if (isArmed && !wasArmed) {
                                 haptic.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
+                            }
+                            val targetX = rubberBand(rawX)
+                            // Pequeña elevación al deslizar hacia arriba, como anticipo de abrir el reproductor
+                            val targetY = if (abs(dragY) > abs(rawX)) (dragY * 0.35f).coerceIn(-maxLiftPx, 0f) else 0f
+                            gestureScope.launch {
+                                offsetXAnim.snapTo(targetX)
+                                offsetYAnim.snapTo(targetY)
                             }
                         },
                         onDragEnd = {
                             when {
                                 // Deslizar hacia arriba (predominante) -> Reproductor completo
-                                -dragY >= expandThresholdPx && abs(dragY) > abs(offsetX) -> {
+                                -dragY >= expandThresholdPx && abs(dragY) > abs(rawX) -> {
                                     playerViewModel.setExpanded(true)
                                 }
                                 // Deslizar hacia la izquierda -> Siguiente episodio
-                                offsetX <= -skipThresholdPx -> {
+                                rawX <= -skipThresholdPx -> {
                                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                     playerViewModel.skipToNextEpisode()
                                 }
                                 // Deslizar hacia la derecha -> Episodio anterior
-                                offsetX >= skipThresholdPx -> {
+                                rawX >= skipThresholdPx -> {
                                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                     playerViewModel.skipToPreviousEpisode()
                                 }
                             }
-                            offsetX = 0f
-                            dragY = 0f
+                            settle()
                         },
-                        onDragCancel = {
-                            offsetX = 0f
-                            dragY = 0f
-                        }
+                        onDragCancel = { settle() }
                     )
                 }
                 .clickable { playerViewModel.setExpanded(true) },
