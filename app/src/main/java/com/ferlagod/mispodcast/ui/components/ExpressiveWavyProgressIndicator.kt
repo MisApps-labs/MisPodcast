@@ -25,7 +25,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -36,7 +36,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -68,7 +71,9 @@ fun ExpressiveWavySlider(
     chapters: List<Chapter> = emptyList(),
     totalDurationMs: Long = 0L,
     waveColor: Color = MaterialTheme.colorScheme.primary,
-    trackColor: Color = MaterialTheme.colorScheme.surfaceVariant
+    trackColor: Color = MaterialTheme.colorScheme.surfaceVariant,
+    /** Posición provisional mientras se arrastra (null al soltar), p. ej. para mostrar el tiempo destino. */
+    onScrub: (Float?) -> Unit = {}
 ) {
     val maxVal = if (valueRange.endInclusive > 0f) valueRange.endInclusive else 1f
     val fraction = (value / maxVal).coerceIn(0f, 1f)
@@ -77,6 +82,15 @@ fun ExpressiveWavySlider(
     var dragFraction by remember { mutableFloatStateOf(fraction) }
 
     val effectiveFraction = if (isDragging) dragFraction else fraction
+
+    val haptic = LocalHapticFeedback.current
+    val currentOnValueChange by rememberUpdatedState(onValueChange)
+    val currentOnScrub by rememberUpdatedState(onScrub)
+    val chapterFractions = remember(chapters, totalDurationMs) {
+        if (totalDurationMs <= 0L) emptyList()
+        else chapters.map { (it.startTimeMs.toFloat() / totalDurationMs.toFloat()).coerceIn(0f, 1f) }
+            .filter { it > 0f && it < 1f }
+    }
 
     // Animación de fase para la onda mientras se reproduce
     val infiniteTransition = rememberInfiniteTransition(label = "WavyProgressPhaseTransition")
@@ -97,27 +111,37 @@ fun ExpressiveWavySlider(
             .pointerInput(maxVal) {
                 detectTapGestures { offset ->
                     val newFrac = (offset.x / size.width.toFloat()).coerceIn(0f, 1f)
-                    onValueChange(newFrac * maxVal)
+                    haptic.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                    currentOnValueChange(newFrac * maxVal)
                 }
             }
             .pointerInput(maxVal) {
-                detectDragGestures(
+                // Al arrastrar solo se mueve el pulgar; la búsqueda real se hace una vez al soltar
+                // (antes se llamaba a seekTo en cada movimiento del dedo y el audio tartamudeaba)
+                detectHorizontalDragGestures(
                     onDragStart = { offset ->
                         isDragging = true
                         dragFraction = (offset.x / size.width.toFloat()).coerceIn(0f, 1f)
-                        onValueChange(dragFraction * maxVal)
+                        currentOnScrub(dragFraction * maxVal)
                     },
                     onDragEnd = {
                         isDragging = false
-                        onValueChange(dragFraction * maxVal)
+                        currentOnScrub(null)
+                        currentOnValueChange(dragFraction * maxVal)
                     },
                     onDragCancel = {
                         isDragging = false
+                        currentOnScrub(null)
                     },
-                    onDrag = { change, _ ->
+                    onHorizontalDrag = { change, _ ->
                         change.consume()
+                        val previous = dragFraction
                         dragFraction = (change.position.x / size.width.toFloat()).coerceIn(0f, 1f)
-                        onValueChange(dragFraction * maxVal)
+                        // Pequeño «clic» háptico al cruzar el inicio de un capítulo
+                        if (chapterFractions.any { (it - previous) * (it - dragFraction) < 0f }) {
+                            haptic.performHapticFeedback(HapticFeedbackType.SegmentFrequentTick)
+                        }
+                        currentOnScrub(dragFraction * maxVal)
                     }
                 )
             }

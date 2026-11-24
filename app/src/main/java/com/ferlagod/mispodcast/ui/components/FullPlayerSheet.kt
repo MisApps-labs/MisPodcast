@@ -580,6 +580,9 @@ fun FullPlayerSheet(
                     // 4. SLIDER ONDULADO MATERIAL 3 EXPRESSIVE CON MARCAS DE CAPÍTULOS
                     val maxSlider = if (durationMs > 0) durationMs.toFloat() else 1f
                     val currentPosFloat = currentPosMs.toFloat().coerceIn(0f, maxSlider)
+                    // Mientras se arrastra la barra, los tiempos muestran el destino en lugar de la posición real
+                    var scrubPosMs by remember { mutableStateOf<Long?>(null) }
+                    val shownPosMs = scrubPosMs ?: currentPosMs
 
                     ExpressiveWavySlider(
                         value = currentPosFloat,
@@ -590,6 +593,7 @@ fun FullPlayerSheet(
                         totalDurationMs = durationMs,
                         waveColor = accentColor,
                         trackColor = playerContentColor.copy(alpha = 0.22f),
+                        onScrub = { scrubPosMs = it?.toLong() },
                         modifier = Modifier.fillMaxWidth()
                     )
 
@@ -599,11 +603,11 @@ fun FullPlayerSheet(
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
-                            text = formatTime(currentPosMs),
+                            text = formatTime(shownPosMs),
                             style = TabularTimeStyle.copy(color = playerContentColor.copy(alpha = 0.75f))
                         )
                         Text(
-                            text = "-" + formatTime(max(0L, durationMs - currentPosMs)),
+                            text = "-" + formatTime(max(0L, durationMs - shownPosMs)),
                             style = TabularTimeStyle.copy(color = playerContentColor.copy(alpha = 0.75f))
                         )
                     }
