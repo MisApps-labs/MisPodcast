@@ -754,4 +754,10 @@
     <string name="link_no_app">Nessuna app può aprire questo link.</string>
     <string name="nextcloud_edit_account">Modifica</string>
     <string name="nextcloud_hide_account">Nascondi</string>
+    <string name="snackbar_queue_sorted">Coda ordinata</string>
+    <plurals name="snackbar_queue_cleared">
+        <item quantity="one">%d episodio rimosso dalla coda</item>
+        <item quantity="many">%d episodi rimossi dalla coda</item>
+        <item quantity="other">%d episodi rimossi dalla coda</item>
+    </plurals>
 </resources>

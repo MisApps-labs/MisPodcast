@@ -750,4 +750,9 @@
     <string name="link_no_app">There\'s no app to open this link.</string>
     <string name="nextcloud_edit_account">Edit</string>
     <string name="nextcloud_hide_account">Hide</string>
+    <string name="snackbar_queue_sorted">Queue sorted</string>
+    <plurals name="snackbar_queue_cleared">
+        <item quantity="one">%d episode removed from the queue</item>
+        <item quantity="other">%d episodes removed from the queue</item>
+    </plurals>
 </resources>

@@ -690,6 +690,12 @@ class PodcastRepository(
             podcastDao.restoreEpisodeUndoSnapshot(snapshot)
         }
 
+    suspend fun captureQueueSnapshot(): List<com.ferlagod.mispodcast.data.local.entities.QueueItemEntity> =
+        withContext(Dispatchers.IO) { podcastDao.getQueueItemsSync() }
+
+    suspend fun restoreQueueSnapshot(snapshot: List<com.ferlagod.mispodcast.data.local.entities.QueueItemEntity>) =
+        withContext(Dispatchers.IO) { podcastDao.restoreQueueSnapshot(snapshot) }
+
     suspend fun clearQueue() = withContext(Dispatchers.IO) {
         podcastDao.clearQueue()
     }

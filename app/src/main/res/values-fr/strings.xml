@@ -754,4 +754,10 @@
     <string name="link_no_app">Aucune app ne peut ouvrir ce lien.</string>
     <string name="nextcloud_edit_account">Modifier</string>
     <string name="nextcloud_hide_account">Masquer</string>
+    <string name="snackbar_queue_sorted">File triée</string>
+    <plurals name="snackbar_queue_cleared">
+        <item quantity="one">%d épisode retiré de la file</item>
+        <item quantity="many">%d épisodes retirés de la file</item>
+        <item quantity="other">%d épisodes retirés de la file</item>
+    </plurals>
 </resources>

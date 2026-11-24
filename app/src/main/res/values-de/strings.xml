@@ -748,4 +748,9 @@
     <string name="link_no_app">Keine App zum Öffnen dieses Links.</string>
     <string name="nextcloud_edit_account">Bearbeiten</string>
     <string name="nextcloud_hide_account">Ausblenden</string>
+    <string name="snackbar_queue_sorted">Warteschlange sortiert</string>
+    <plurals name="snackbar_queue_cleared">
+        <item quantity="one">%d Folge aus der Warteschlange entfernt</item>
+        <item quantity="other">%d Folgen aus der Warteschlange entfernt</item>
+    </plurals>
 </resources>

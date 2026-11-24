@@ -438,7 +438,9 @@ class PodcastViewModel @JvmOverloads constructor(
     data class UndoableAction(
         val id: Long,
         val message: UiText,
-        internal val snapshot: com.ferlagod.mispodcast.data.local.model.EpisodeUndoSnapshot
+        internal val snapshot: com.ferlagod.mispodcast.data.local.model.EpisodeUndoSnapshot? = null,
+        /** Cola completa antes de la acción, para deshacer «Vaciar cola» u «Ordenar». */
+        internal val queueSnapshot: List<com.ferlagod.mispodcast.data.local.entities.QueueItemEntity>? = null
     )
 
     private val _undoableAction = MutableStateFlow<UndoableAction?>(null)
@@ -482,7 +484,8 @@ class PodcastViewModel @JvmOverloads constructor(
         val action = _undoableAction.value?.takeIf { it.id == actionId } ?: return
         _undoableAction.value = null
         viewModelScope.launch {
-            repository.restoreEpisodeUndoSnapshot(action.snapshot)
+            action.snapshot?.let { repository.restoreEpisodeUndoSnapshot(it) }
+            action.queueSnapshot?.let { repository.restoreQueueSnapshot(it) }
             syncWithNextcloud()
         }
     }
@@ -538,8 +541,17 @@ class PodcastViewModel @JvmOverloads constructor(
             }
 
             val newOrderedIds = listOfNotNull(currentActive?.episode?.id) + sortedSubsequent.map { it.episode.id }
+            val before = repository.captureQueueSnapshot()
             repository.reorderQueue(newOrderedIds)
             syncWithNextcloud()
+            // Ordenar borra el orden manual: se ofrece deshacerlo
+            if (before.sortedBy { it.positionIndex }.map { it.episodeId } != newOrderedIds) {
+                _undoableAction.value = UndoableAction(
+                    id = System.nanoTime(),
+                    message = UiText.Res(R.string.snackbar_queue_sorted),
+                    queueSnapshot = before
+                )
+            }
         }
     }
 
@@ -613,14 +625,22 @@ class PodcastViewModel @JvmOverloads constructor(
 
     fun clearQueue() {
         viewModelScope.launch {
-            val q = queue.value
-            val hasPlaying = q.any { it.isCurrentlyPlaying }
+            val before = repository.captureQueueSnapshot()
+            val hasPlaying = before.any { it.isCurrentlyPlaying }
             if (hasPlaying) {
                 repository.clearSubsequentQueue()
             } else {
                 repository.clearQueue()
             }
             syncWithNextcloud()
+            val removedCount = if (hasPlaying) before.size - 1 else before.size
+            if (removedCount > 0) {
+                _undoableAction.value = UndoableAction(
+                    id = System.nanoTime(),
+                    message = UiText.Plural(R.plurals.snackbar_queue_cleared, removedCount, removedCount),
+                    queueSnapshot = before
+                )
+            }
         }
     }
 
