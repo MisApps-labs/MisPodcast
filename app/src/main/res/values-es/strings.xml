@@ -602,7 +602,7 @@
     <!-- Bienvenida y consejos de primer uso -->
     <string name="hint_got_it">Entendido</string>
     <string name="hint_episode_swipe">Desliza un episodio a la derecha para añadirlo a la cola, o a la izquierda para marcarlo como escuchado.</string>
-    <string name="hint_queue_swipe">Desliza a la izquierda para quitar un episodio de la cola, o a la derecha para marcarlo como escuchado.</string>
+    <string name="hint_queue_swipe">Desliza a la izquierda para quitar un episodio de la cola, o a la derecha para marcarlo como escuchado. Mantén pulsado o arrastra el asa para reordenar.</string>
     <string name="hint_mini_player_gestures">Desliza el mini reproductor hacia arriba para abrir el reproductor completo, o a los lados para cambiar de episodio.</string>
     <string name="onboarding_title">Te damos la bienvenida a Mis Podcast</string>
     <string name="onboarding_subtitle">Reproductor de podcasts libre, sin anuncios ni rastreo. ¿Cómo quieres empezar?</string>

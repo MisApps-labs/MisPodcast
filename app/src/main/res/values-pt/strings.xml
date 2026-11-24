@@ -600,7 +600,7 @@
     <!-- Bienvenida y consejos de primer uso -->
     <string name="hint_got_it">Entendi</string>
     <string name="hint_episode_swipe">Deslize um episódio para a direita para adicioná-lo à fila, ou para a esquerda para marcá-lo como ouvido.</string>
-    <string name="hint_queue_swipe">Deslize para a esquerda para remover um episódio da fila, ou para a direita para marcá-lo como ouvido.</string>
+    <string name="hint_queue_swipe">Deslize para a esquerda para remover um episódio da fila, ou para a direita para marcá-lo como ouvido. Mantenha pressionado ou arraste a alça para reordenar.</string>
     <string name="hint_mini_player_gestures">Deslize o mini player para cima para abrir o player completo, ou para os lados para trocar de episódio.</string>
     <string name="onboarding_title">Bem-vindo ao Mis Podcast</string>
     <string name="onboarding_subtitle">Player de podcasts livre, sem anúncios nem rastreamento. Como você quer começar?</string>

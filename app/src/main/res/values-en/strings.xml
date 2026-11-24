@@ -600,7 +600,7 @@
     <!-- Bienvenida y consejos de primer uso -->
     <string name="hint_got_it">Got it</string>
     <string name="hint_episode_swipe">Swipe an episode right to add it to the queue, or left to mark it as played.</string>
-    <string name="hint_queue_swipe">Swipe left to remove an episode from the queue, or right to mark it as played.</string>
+    <string name="hint_queue_swipe">Swipe left to remove an episode from the queue, or right to mark it as played. Long-press or drag the handle to reorder.</string>
     <string name="hint_mini_player_gestures">Swipe the mini player up to open the full player, or sideways to change episode.</string>
     <string name="onboarding_title">Welcome to Mis Podcast</string>
     <string name="onboarding_subtitle">Free podcast player with no ads or tracking. How would you like to start?</string>

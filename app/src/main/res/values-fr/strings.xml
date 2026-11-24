@@ -600,7 +600,7 @@
     <!-- Bienvenida y consejos de primer uso -->
     <string name="hint_got_it">Compris</string>
     <string name="hint_episode_swipe">Balayez un épisode vers la droite pour l\'ajouter à la file d\'attente, ou vers la gauche pour le marquer comme écouté.</string>
-    <string name="hint_queue_swipe">Balayez vers la gauche pour retirer un épisode de la file d\'attente, ou vers la droite pour le marquer comme écouté.</string>
+    <string name="hint_queue_swipe">Balayez vers la gauche pour retirer un épisode de la file d\'attente, ou vers la droite pour le marquer comme écouté. Appuyez longuement ou faites glisser la poignée pour réorganiser.</string>
     <string name="hint_mini_player_gestures">Balayez le mini-lecteur vers le haut pour ouvrir le lecteur complet, ou sur les côtés pour changer d\'épisode.</string>
     <string name="onboarding_title">Bienvenue dans Mis Podcast</string>
     <string name="onboarding_subtitle">Lecteur de podcasts libre, sans publicité ni pistage. Comment voulez-vous commencer ?</string>

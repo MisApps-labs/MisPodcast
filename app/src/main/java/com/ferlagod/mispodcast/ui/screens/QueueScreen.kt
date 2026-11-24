@@ -41,7 +41,21 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.VisibilityThreshold
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.zIndex
+import com.ferlagod.mispodcast.ui.components.rememberReorderableLazyListState
+import kotlinx.coroutines.delay
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -176,6 +190,71 @@ fun QueueScreen(
         queueItems.find { it.episode.id == selectedEpisodeId }
     }
 
+    // --- Reordenación por arrastre continuo ---
+    // Los episodios que siguen al actual (misma regla que la lista de abajo)
+    val baseSubsequentItems = remember(queueItems, currentEpisode?.id) {
+        val activeId = currentEpisode?.id
+        if (activeId != null) queueItems.filter { it.episode.id != activeId } else queueItems.drop(1)
+    }
+    val baseSubsequentIds = remember(baseSubsequentItems) { baseSubsequentItems.map { it.episode.id } }
+    // Orden local mientras se arrastra (y justo después, hasta que la base de datos lo confirme)
+    var localOrder by remember { mutableStateOf<List<String>?>(null) }
+    val displayedSubsequentItems = remember(baseSubsequentItems, localOrder) {
+        val order = localOrder ?: return@remember baseSubsequentItems
+        val byId = baseSubsequentItems.associateBy { it.episode.id }
+        order.mapNotNull { byId[it] } + baseSubsequentItems.filter { it.episode.id !in order }
+    }
+    val displayedIds = remember(displayedSubsequentItems) { displayedSubsequentItems.map { it.episode.id }.toSet() }
+
+    val listState = rememberLazyListState()
+    val reorderState = rememberReorderableLazyListState(
+        listState = listState,
+        canMove = { key -> key in displayedIds },
+        onMove = { from, to ->
+            val order = (localOrder ?: baseSubsequentIds).toMutableList()
+            val fromIdx = order.indexOf(from)
+            val toIdx = order.indexOf(to)
+            if (fromIdx >= 0 && toIdx >= 0) {
+                order.add(toIdx, order.removeAt(fromIdx))
+                localOrder = order
+            }
+        },
+        onSwap = { haptic.performHapticFeedback(HapticFeedbackType.SegmentFrequentTick) }
+    )
+    val isReordering = reorderState.isDragging
+
+    // Al soltar se guarda una sola vez el movimiento completo (antes se escribía en cada paso)
+    val finishReorder by rememberUpdatedState<(String) -> Unit> { key ->
+        if (reorderState.draggingKey == key) {
+            reorderState.onDragEnd()
+            haptic.performHapticFeedback(HapticFeedbackType.GestureEnd)
+            val order = localOrder
+            val from = baseSubsequentIds.indexOf(key)
+            val to = order?.indexOf(key) ?: -1
+            if (from >= 0 && to >= 0 && from != to) {
+                podcastViewModel.moveSubsequentQueueItem(from, to, currentEpisode?.id)
+            } else {
+                localOrder = null
+            }
+        }
+    }
+    val startReorder by rememberUpdatedState<(String) -> Unit> { key ->
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        reorderState.onDragStart(key)
+    }
+
+    // Descarta el orden local cuando la cola guardada ya lo refleja (o si no llega a reflejarlo)
+    LaunchedEffect(baseSubsequentIds, isReordering, localOrder) {
+        val order = localOrder ?: return@LaunchedEffect
+        if (isReordering) return@LaunchedEffect
+        if (order == baseSubsequentIds) {
+            localOrder = null
+        } else {
+            delay(1500)
+            localOrder = null
+        }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -183,6 +262,7 @@ fun QueueScreen(
             .background(MaterialTheme.colorScheme.background)
     ) {
         LazyColumn(
+            state = listState,
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(bottom = 140.dp)
         ) {
@@ -543,17 +623,7 @@ fun QueueScreen(
             }
 
             // 2, 3 y 4. Elementos siguientes en la cola con Reordenación y Gestos Swipe
-            val subsequentItems = when {
-                isCurrentPlayingInQueue -> {
-                    queueItems.filter { it.episode.id != activeQueueEpisode.episode.id }
-                }
-                currentEpisode != null -> {
-                    queueItems.filter { it.episode.id != currentEpisode?.id }
-                }
-                else -> {
-                    queueItems.drop(1)
-                }
-            }
+            val subsequentItems = displayedSubsequentItems
             if (subsequentItems.isNotEmpty()) {
                 item {
                     Row(
@@ -590,7 +660,32 @@ fun QueueScreen(
                     items = subsequentItems,
                     key = { _, item -> item.episode.id }
                 ) { index, item ->
-                    Box(modifier = Modifier.animateItem()) {
+                    val episodeKey = item.episode.id
+                    val isDragged = reorderState.draggingKey == episodeKey
+                    val dragElevation by animateDpAsState(
+                        targetValue = if (isDragged) 10.dp else 0.dp,
+                        label = "queue_drag_elevation"
+                    )
+                    val dragScale by animateFloatAsState(
+                        targetValue = if (isDragged) 1.03f else 1f,
+                        label = "queue_drag_scale"
+                    )
+                    Box(
+                        modifier = Modifier
+                            .zIndex(if (isDragged) 1f else 0f)
+                            .graphicsLayer {
+                                translationY = reorderState.offsetOf(episodeKey)
+                                scaleX = dragScale
+                                scaleY = dragScale
+                            }
+                            // La fila arrastrada va pegada al dedo; las demás se apartan con un resorte suave
+                            .animateItem(
+                                placementSpec = if (isDragged) null else spring(
+                                    stiffness = Spring.StiffnessMediumLow,
+                                    visibilityThreshold = IntOffset.VisibilityThreshold
+                                )
+                            )
+                    ) {
                         // 4. Deslizar con resorte: solo actúa si se suelta pasado el umbral
                         DeliberateSwipeBox(
                             // Deslizar derecha: Marcar como reproducido y eliminar de la cola
@@ -660,12 +755,24 @@ fun QueueScreen(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(horizontal = 20.dp, vertical = 5.dp)
+                                    // Mantener pulsada la tarjeta también permite arrastrarla
+                                    .pointerInput(episodeKey) {
+                                        detectDragGesturesAfterLongPress(
+                                            onDragStart = { startReorder(episodeKey) },
+                                            onDragEnd = { finishReorder(episodeKey) },
+                                            onDragCancel = { finishReorder(episodeKey) },
+                                            onDrag = { change, dragAmount ->
+                                                change.consume()
+                                                reorderState.onDrag(dragAmount.y)
+                                            }
+                                        )
+                                    }
                                     .clickable { selectedEpisodeId = item.episode.id },
                                 shape = RoundedCornerShape(16.dp),
                                 colors = CardDefaults.cardColors(
-                                    containerColor = MaterialTheme.colorScheme.surface
+                                    containerColor = if (isDragged) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surface
                                 ),
-                                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+                                elevation = CardDefaults.cardElevation(defaultElevation = dragElevation)
                             ) {
                                 Row(
                                     modifier = Modifier
@@ -802,45 +909,31 @@ fun QueueScreen(
 
                                     Spacer(modifier = Modifier.width(4.dp))
 
-                                    // 3. Icono de agarre DragHandle con detección de arrastre vertical
-                                    var dragAccumulatedY by remember { mutableFloatStateOf(0f) }
-                                    var isDraggingItem by remember { mutableStateOf(false) }
-
-                                    Icon(
-                                        imageVector = Icons.Filled.DragHandle,
-                                        contentDescription = stringResource(R.string.drag_handle_description),
-                                        tint = if (isDraggingItem) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                    // 3. Asa de arrastre: la fila sigue al dedo en tiempo real. La clave es el id
+                                    // (no el índice) para que el gesto no se corte al cambiar de posición.
+                                    Box(
+                                        contentAlignment = Alignment.Center,
                                         modifier = Modifier
-                                            .size(28.dp)
-                                            .pointerInput(subsequentItems.size, index) {
-                                                detectVerticalDragGestures(
-                                                    onDragStart = {
-                                                        isDraggingItem = true
-                                                        dragAccumulatedY = 0f
-                                                    },
-                                                    onDragEnd = {
-                                                        isDraggingItem = false
-                                                        dragAccumulatedY = 0f
-                                                    },
-                                                    onDragCancel = {
-                                                        isDraggingItem = false
-                                                        dragAccumulatedY = 0f
-                                                    },
-                                                    onVerticalDrag = { change, dragAmount ->
+                                            .size(width = 36.dp, height = 48.dp)
+                                            .pointerInput(episodeKey) {
+                                                detectDragGestures(
+                                                    onDragStart = { startReorder(episodeKey) },
+                                                    onDragEnd = { finishReorder(episodeKey) },
+                                                    onDragCancel = { finishReorder(episodeKey) },
+                                                    onDrag = { change, dragAmount ->
                                                         change.consume()
-                                                        dragAccumulatedY += dragAmount
-                                                        val thresholdPx = 70.dp.toPx()
-                                                        if (dragAccumulatedY > thresholdPx && index < subsequentItems.lastIndex) {
-                                                            podcastViewModel.moveSubsequentQueueItem(index, index + 1, currentEpisode?.id)
-                                                            dragAccumulatedY = 0f
-                                                        } else if (dragAccumulatedY < -thresholdPx && index > 0) {
-                                                            podcastViewModel.moveSubsequentQueueItem(index, index - 1, currentEpisode?.id)
-                                                            dragAccumulatedY = 0f
-                                                        }
+                                                        reorderState.onDrag(dragAmount.y)
                                                     }
                                                 )
                                             }
-                                    )
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.DragHandle,
+                                            contentDescription = stringResource(R.string.drag_handle_description),
+                                            tint = if (isDragged) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                            modifier = Modifier.size(28.dp)
+                                        )
+                                    }
                                 }
                             }
                         }

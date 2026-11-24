@@ -600,7 +600,7 @@
     <!-- Bienvenida y consejos de primer uso -->
     <string name="hint_got_it">Verstanden</string>
     <string name="hint_episode_swipe">Wische eine Folge nach rechts, um sie zur Warteschlange hinzuzufügen, oder nach links, um sie als gehört zu markieren.</string>
-    <string name="hint_queue_swipe">Wische nach links, um eine Folge aus der Warteschlange zu entfernen, oder nach rechts, um sie als gehört zu markieren.</string>
+    <string name="hint_queue_swipe">Wische nach links, um eine Folge aus der Warteschlange zu entfernen, oder nach rechts, um sie als gehört zu markieren. Lange drücken oder am Griff ziehen, um die Reihenfolge zu ändern.</string>
     <string name="hint_mini_player_gestures">Wische den Mini-Player nach oben, um den vollständigen Player zu öffnen, oder seitwärts, um die Folge zu wechseln.</string>
     <string name="onboarding_title">Willkommen bei Mis Podcast</string>
     <string name="onboarding_subtitle">Freier Podcast-Player ohne Werbung und Tracking. Wie möchtest du beginnen?</string>

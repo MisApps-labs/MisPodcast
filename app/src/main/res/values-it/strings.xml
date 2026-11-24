@@ -600,7 +600,7 @@
     <!-- Bienvenida y consejos de primer uso -->
     <string name="hint_got_it">Ho capito</string>
     <string name="hint_episode_swipe">Scorri un episodio verso destra per aggiungerlo alla coda, o verso sinistra per segnarlo come ascoltato.</string>
-    <string name="hint_queue_swipe">Scorri verso sinistra per rimuovere un episodio dalla coda, o verso destra per segnarlo come ascoltato.</string>
+    <string name="hint_queue_swipe">Scorri verso sinistra per rimuovere un episodio dalla coda, o verso destra per segnarlo come ascoltato. Tieni premuto o trascina la maniglia per riordinare.</string>
     <string name="hint_mini_player_gestures">Scorri il mini player verso l\'alto per aprire il player completo, o di lato per cambiare episodio.</string>
     <string name="onboarding_title">Benvenuto in Mis Podcast</string>
     <string name="onboarding_subtitle">Lettore di podcast libero, senza pubblicità né tracciamento. Come vuoi iniziare?</string>
