@@ -49,7 +49,7 @@ class UndoSwipeActionsTest {
     private lateinit var dao: PodcastDao
 
     @Before
-    fun setUp() = runBlocking {
+    fun setUp(): Unit = runBlocking {
         val context: Context = ApplicationProvider.getApplicationContext()
         database = Room.inMemoryDatabaseBuilder(context, PodcastDatabase::class.java)
             .allowMainThreadQueries()
@@ -99,7 +99,7 @@ class UndoSwipeActionsTest {
     private suspend fun queueOrder() = dao.getQueueItemsSync().map { it.episodeId }
 
     @Test
-    fun undoMarkPlayedAndRemoveRestoresQueuePositionProgressAndHistory() = runBlocking {
+    fun undoMarkPlayedAndRemoveRestoresQueuePositionProgressAndHistory(): Unit = runBlocking {
         val snapshot = dao.captureEpisodeUndoSnapshot("ep-3")!!
 
         dao.markAsPlayedAndRemoveFromQueue("ep-3")
@@ -119,7 +119,7 @@ class UndoSwipeActionsTest {
     }
 
     @Test
-    fun undoRemoveFromQueueKeepsOtherChanges() = runBlocking {
+    fun undoRemoveFromQueueKeepsOtherChanges(): Unit = runBlocking {
         val snapshot = dao.captureEpisodeUndoSnapshot("ep-2")!!
         dao.removeFromQueue("ep-2")
         dao.reindexQueue()
@@ -133,7 +133,7 @@ class UndoSwipeActionsTest {
     }
 
     @Test
-    fun undoAddToQueueRemovesTheEpisodeAgain() = runBlocking {
+    fun undoAddToQueueRemovesTheEpisodeAgain(): Unit = runBlocking {
         dao.removeFromQueue("ep-4")
         dao.reindexQueue()
         val snapshot = dao.captureEpisodeUndoSnapshot("ep-4")!!
@@ -146,7 +146,7 @@ class UndoSwipeActionsTest {
     }
 
     @Test
-    fun undoTogglePlayedRestoresPreviousProgress() = runBlocking {
+    fun undoTogglePlayedRestoresPreviousProgress(): Unit = runBlocking {
         val snapshot = dao.captureEpisodeUndoSnapshot("ep-3")!!
         dao.markEpisodeAsPlayed("ep-3", true)
 
