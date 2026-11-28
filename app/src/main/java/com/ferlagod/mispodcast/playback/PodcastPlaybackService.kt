@@ -856,7 +856,7 @@ class PodcastPlaybackService : MediaLibraryService() {
                 }
                 PlaybackController.ACTION_CUSTOM_TOGGLE_FAVORITE -> {
                     val episodeId = currentPlayingEpisodeId
-                        ?: return Futures.immediateFuture(SessionResult(SessionResult.RESULT_ERROR_BAD_VALUE))
+                        ?: return Futures.immediateFuture(SessionResult(SessionError.ERROR_BAD_VALUE))
                     serviceScope.launch {
                         withContext(Dispatchers.IO) {
                             val ep = database.podcastDao().getEpisodeById(episodeId) ?: return@withContext
