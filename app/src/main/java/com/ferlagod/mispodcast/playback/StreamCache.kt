@@ -41,6 +41,7 @@ import com.ferlagod.mispodcast.data.local.entities.EpisodeEntity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
@@ -186,11 +187,15 @@ private class VersionCheckingDataSource(
 /**
  * Precarga en la caché el tramo de los próximos episodios por el que van a empezar a sonar:
  * el principio del fichero o, si estaba a medias, la zona de la posición guardada.
+ *
+ * [canPreload] decide si la red actual sirve (p. ej. «Descargar solo con Wi-Fi»): mientras no
+ * sirva, la precarga espera. Lo que falle por falta de red se reintenta con espera creciente.
  */
 @OptIn(UnstableApi::class)
 class StreamPreloader(
     private val cacheDataSourceFactory: CacheDataSource.Factory,
-    private val scope: CoroutineScope
+    private val scope: CoroutineScope,
+    private val canPreload: () -> Boolean
 ) {
     private data class Range(val uri: Uri, val position: Long, val length: Long)
 
@@ -207,10 +212,36 @@ class StreamPreloader(
         lastRanges = ranges
         job?.cancel()
         if (ranges.isEmpty()) return
-        job = scope.launch(Dispatchers.IO) {
-            for (range in ranges) {
+        job = scope.launch(Dispatchers.IO) { preloadWithRetries(ranges) }
+    }
+
+    private suspend fun preloadWithRetries(ranges: List<Range>) {
+        var pending = ranges
+        var failedPasses = 0
+        var repeatedAfterEviction = false
+        while (pending.isNotEmpty()) {
+            if (!canPreload()) {
+                delay(WAIT_FOR_NETWORK_MS)
+                continue
+            }
+            val evictionsBefore = StreamCache.evictionCount()
+            val failed = mutableListOf<Range>()
+            for (range in pending) {
                 coroutineContext.ensureActive()
-                cacheRange(range)
+                if (!canPreload() || !cacheRange(range)) failed += range
+            }
+            // Si algún episodio cambió en el servidor se descartó lo ya guardado (p. ej. la
+            // cabecera): se repasa todo una vez para que quede la versión nueva completa
+            if (!repeatedAfterEviction && StreamCache.evictionCount() != evictionsBefore) {
+                repeatedAfterEviction = true
+                pending = ranges
+                continue
+            }
+            pending = failed
+            if (pending.isEmpty()) return
+            if (canPreload()) {
+                if (++failedPasses > MAX_FAILED_PASSES) return
+                delay((RETRY_BASE_MS shl (failedPasses - 1)).coerceAtMost(RETRY_MAX_MS))
             }
         }
     }
@@ -243,7 +274,8 @@ class StreamPreloader(
         )
     }
 
-    private suspend fun cacheRange(range: Range) {
+    /** @return true si el tramo quedó en caché (o ya estaba). */
+    private suspend fun cacheRange(range: Range): Boolean {
         val dataSpec = DataSpec.Builder()
             .setUri(range.uri)
             .setPosition(range.position)
@@ -251,13 +283,17 @@ class StreamPreloader(
             .build()
         val writer = CacheWriter(cacheDataSourceFactory.createDataSourceForDownloading(), dataSpec, null, null)
         val handle = coroutineContext.job.invokeOnCompletion { writer.cancel() }
-        try {
+        return try {
             writer.cache()
+            true
         } catch (_: InterruptedIOException) {
-            // Cancelado: cambió la cola o el episodio
+            // Cancelado: cambió la cola o el episodio (si no, ensureActive no lanza y se reintenta)
+            coroutineContext.ensureActive()
+            false
         } catch (e: IOException) {
-            // Sin red o el servidor no admite rangos: se intentará de nuevo al reproducir
+            // Sin red, corte o el fichero cambió en el servidor: se reintenta más tarde
             Log.d(TAG, "No se pudo precargar ${range.uri}: ${e.message}")
+            false
         } finally {
             handle.dispose()
         }
@@ -265,6 +301,11 @@ class StreamPreloader(
 
     private companion object {
         const val TAG = "StreamPreloader"
+        /** Comprobación de la red mientras no se permite precargar (sin red o datos móviles). */
+        const val WAIT_FOR_NETWORK_MS = 60_000L
+        const val RETRY_BASE_MS = 30_000L
+        const val RETRY_MAX_MS = 5 * 60_000L
+        const val MAX_FAILED_PASSES = 6
         /** ~3 min a 128 kbps: lo suficiente para arrancar y pasar un túnel. */
         const val START_BYTES = 3L * 1024 * 1024
         const val HEADER_BYTES = 512L * 1024

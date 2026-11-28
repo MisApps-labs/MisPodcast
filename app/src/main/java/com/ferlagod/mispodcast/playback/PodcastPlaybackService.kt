@@ -114,6 +114,8 @@ class PodcastPlaybackService : MediaLibraryService() {
     /** Episodio terminado al saltar más allá de su final: cuenta como completado al cambiar. */
     private var skippedPastEndEpisodeId: String? = null
     private lateinit var streamPreloader: StreamPreloader
+    /** «Descargar solo con Wi-Fi»: también limita la precarga de la cola. */
+    @Volatile private var preloadOnlyOnUnmetered = true
 
     companion object {
         private const val TAG = "PodcastPlaybackService"
@@ -197,7 +199,27 @@ class PodcastPlaybackService : MediaLibraryService() {
         val monoAudioEnabled: Boolean
     )
 
+    /**
+     * La precarga de la cola es tráfico que el usuario no ha pedido: solo con red, y si está activo
+     * «Descargar solo con Wi-Fi» (o el ahorro de datos del sistema), solo en redes sin coste.
+     */
+    private fun canPreloadOnCurrentNetwork(): Boolean {
+        val cm = getSystemService(android.net.ConnectivityManager::class.java) ?: return false
+        val network = cm.activeNetwork ?: return false
+        val caps = cm.getNetworkCapabilities(network) ?: return false
+        if (!caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)) return false
+        if (!cm.isActiveNetworkMetered) return true
+        val dataSaver = cm.restrictBackgroundStatus == android.net.ConnectivityManager.RESTRICT_BACKGROUND_STATUS_ENABLED
+        return !preloadOnlyOnUnmetered && !dataSaver
+    }
+
     private fun observeUserSettings() {
+        serviceScope.launch {
+            preferencesManager.userSettingsFlow
+                .map { it.downloadOnlyOnWifi }
+                .distinctUntilChanged()
+                .collect { preloadOnlyOnUnmetered = it }
+        }
         serviceScope.launch {
             preferencesManager.userSettingsFlow
                 .map { s ->
@@ -285,7 +307,7 @@ class PodcastPlaybackService : MediaLibraryService() {
             .setReadTimeoutMs(20_000)
         // El streaming pasa por la caché en disco; los ficheros locales los sigue leyendo DefaultDataSource
         val cacheDataSourceFactory = StreamCache.cacheDataSourceFactory(this, httpDataSourceFactory)
-        streamPreloader = StreamPreloader(cacheDataSourceFactory, serviceScope)
+        streamPreloader = StreamPreloader(cacheDataSourceFactory, serviceScope, ::canPreloadOnCurrentNetwork)
         val dataSourceFactory = DefaultDataSource.Factory(this, cacheDataSourceFactory)
 
         // Búfer pensado para podcasts en streaming: guarda hasta 3 min por delante (y el principio
