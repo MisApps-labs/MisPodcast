@@ -20,13 +20,20 @@ package com.ferlagod.mispodcast.playback
 
 import android.content.Context
 import android.net.Uri
+import android.os.SystemClock
 import android.util.Log
 import androidx.annotation.OptIn
+import androidx.media3.common.C
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
+import androidx.media3.datasource.HttpDataSource
+import androidx.media3.datasource.TransferListener
+import androidx.media3.datasource.cache.Cache
 import androidx.media3.datasource.cache.CacheDataSource
+import androidx.media3.datasource.cache.ContentMetadata
+import androidx.media3.datasource.cache.ContentMetadataMutations
 import androidx.media3.datasource.cache.CacheWriter
 import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
@@ -40,6 +47,8 @@ import kotlinx.coroutines.launch
 import java.io.File
 import java.io.IOException
 import java.io.InterruptedIOException
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.coroutineContext
 
 /**
@@ -74,12 +83,104 @@ object StreamCache {
     /**
      * Fuente de datos que lee de la caché y, si falta algo, de [upstreamFactory] guardándolo a la vez.
      * Si la caché falla (disco lleno, carpeta borrada…) se reproduce directamente desde la red.
+     * Cada respuesta de la red se contrasta con lo guardado (ver [VersionCheckingDataSource]).
      */
-    fun cacheDataSourceFactory(context: Context, upstreamFactory: DataSource.Factory): CacheDataSource.Factory =
-        CacheDataSource.Factory()
-            .setCache(get(context))
-            .setUpstreamDataSourceFactory(upstreamFactory)
+    fun cacheDataSourceFactory(context: Context, upstreamFactory: DataSource.Factory): CacheDataSource.Factory {
+        val cache = get(context)
+        return CacheDataSource.Factory()
+            .setCache(cache)
+            .setUpstreamDataSourceFactory { VersionCheckingDataSource(upstreamFactory.createDataSource(), cache) }
             .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+    }
+
+    /** Veces que se ha descartado lo guardado de un episodio por haber cambiado en el servidor. */
+    private val evictions = AtomicInteger(0)
+    fun evictionCount(): Int = evictions.get()
+
+    /** Último descarte con error de cada clave: evita encadenar errores si el servidor cambia en cada petición. */
+    private val lastStaleErrorAt = ConcurrentHashMap<String, Long>()
+    private const val STALE_ERROR_INTERVAL_MS = 10 * 60_000L
+
+    /**
+     * Comprueba que la respuesta de la red es la misma versión del fichero que hay en la caché.
+     *
+     * Muchos podcasts insertan anuncios dinámicos: la misma URL puede devolver otro MP3, de otra
+     * longitud, en cada petición. Mezclar trozos de dos versiones produce saltos o audio roto, así
+     * que si la longitud total no coincide con la guardada se descarta todo lo guardado de esa URL.
+     * No se usa el ETag: hay servidores con varios nodos que lo cambian sin que cambie el fichero.
+     *
+     * @return true si se descartó la caché y conviene abortar la lectura en curso (que se reintente
+     *   ya con datos coherentes); false si todo cuadra o no se puede saber.
+     */
+    internal fun checkVersion(cache: Cache, dataSpec: DataSpec, source: DataSource): Boolean {
+        val http = source as? HttpDataSource ?: return false
+        val headers = http.responseHeaders
+        fun header(name: String): String? =
+            headers.entries.firstOrNull { it.key.equals(name, ignoreCase = true) }?.value?.firstOrNull()
+
+        // «Content-Range: bytes 100-199/12345» o, si el servidor devuelve el fichero entero, Content-Length
+        val total = header("Content-Range")?.substringAfterLast('/', "")?.trim()?.toLongOrNull()
+            ?: if (http.responseCode == 200) header("Content-Length")?.trim()?.toLongOrNull() else null
+        if (total == null || total <= 0L) return false
+
+        val key = dataSpec.key ?: dataSpec.uri.toString()
+        val storedLength = ContentMetadata.getContentLength(cache.getContentMetadata(key))
+        val mutations = ContentMetadataMutations()
+        ContentMetadataMutations.setContentLength(mutations, total)
+        if (storedLength == C.LENGTH_UNSET.toLong() || storedLength == total) {
+            if (storedLength == C.LENGTH_UNSET.toLong()) cache.applyContentMetadataMutations(key, mutations)
+            return false
+        }
+
+        Log.i(TAG, "El fichero cambió en el servidor ($storedLength → $total bytes): se descarta lo guardado")
+        cache.removeResource(key)
+        cache.applyContentMetadataMutations(key, mutations)
+        evictions.incrementAndGet()
+
+        val now = SystemClock.elapsedRealtime()
+        val last = lastStaleErrorAt[key]
+        if (last != null && now - last < STALE_ERROR_INTERVAL_MS) return false
+        lastStaleErrorAt[key] = now
+        return true
+    }
+}
+
+/** La versión guardada no coincide con la del servidor: la lectura se reintenta desde cero. */
+class StaleCacheException : IOException("El fichero cambió en el servidor")
+
+/**
+ * Envuelve la fuente de red de la caché para validar cada respuesta con [StreamCache.checkVersion].
+ * Si la caché tenía otra versión, se descarta y se aborta esta lectura: [CacheDataSource] calculó
+ * cuánto leer con la longitud antigua, y ExoPlayer (o la precarga) reintenta ya con la nueva.
+ */
+@OptIn(UnstableApi::class)
+private class VersionCheckingDataSource(
+    private val upstream: DataSource,
+    private val cache: Cache
+) : DataSource {
+    override fun addTransferListener(transferListener: TransferListener) =
+        upstream.addTransferListener(transferListener)
+
+    override fun open(dataSpec: DataSpec): Long {
+        val length = upstream.open(dataSpec)
+        val stale = try {
+            StreamCache.checkVersion(cache, dataSpec, upstream)
+        } catch (e: Exception) {
+            // Un fallo de la comprobación no debe cortar la reproducción
+            Log.w("StreamCache", "No se pudo comprobar la versión en caché", e)
+            false
+        }
+        if (stale) {
+            runCatching { upstream.close() }
+            throw StaleCacheException()
+        }
+        return length
+    }
+
+    override fun read(buffer: ByteArray, offset: Int, length: Int): Int = upstream.read(buffer, offset, length)
+    override fun getUri(): Uri? = upstream.uri
+    override fun getResponseHeaders(): Map<String, List<String>> = upstream.responseHeaders
+    override fun close() = upstream.close()
 }
 
 /**
