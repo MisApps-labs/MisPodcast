@@ -745,18 +745,25 @@ interface PodcastDao {
     /**
      * Devuelve la cola al orden capturado en [snapshot] (deshacer «Vaciar cola» u «Ordenar»):
      * vuelve a insertar los episodios que falten y respeta los añadidos después, que quedan al final.
+     * El episodio que suena ahora sigue en la posición 0, aunque haya empezado después de la acción.
      */
     @Transaction
     suspend fun restoreQueueSnapshot(snapshot: List<QueueItemEntity>) {
         val current = getQueueItemsSync()
         val currentIds = current.map { it.episodeId }.toSet()
-        val hasPlaying = current.any { it.isCurrentlyPlaying }
-        snapshot.filter { it.episodeId !in currentIds && getEpisodeById(it.episodeId) != null }.forEach { item ->
-            insertQueueItem(item.copy(id = 0, isCurrentlyPlaying = item.isCurrentlyPlaying && !hasPlaying))
-        }
+        val playingId = current.firstOrNull { it.isCurrentlyPlaying }?.episodeId
+        snapshot
+            // «Vaciar cola» nunca quita el que sonaba: si ya no está es que terminó y no se repone
+            .filter { it.episodeId !in currentIds && !it.isCurrentlyPlaying }
+            .filter { getEpisodeById(it.episodeId) != null }
+            .forEach { item ->
+                // La marca de reproducción la gestiona el servicio (setCurrentPlaybackInQueue)
+                insertQueueItem(item.copy(id = 0, isCurrentlyPlaying = false))
+            }
         val restoredIds = getOrderedQueueEpisodeIds().toSet()
         val snapshotOrder = snapshot.sortedBy { it.positionIndex }.map { it.episodeId }.filter { it in restoredIds }
-        reorderQueue(snapshotOrder + current.map { it.episodeId }.filter { it !in snapshotOrder })
+        val order = snapshotOrder + current.map { it.episodeId }.filter { it !in snapshotOrder }
+        reorderQueue(if (playingId != null) listOf(playingId) + order.filter { it != playingId } else order)
         reindexQueue()
     }
 
